@@ -1,0 +1,23 @@
+{
+  "name": "aliyun-oss-uploader",
+  "version": "1.0.0",
+  "description": "AliOSS OSS Uploader",
+  "main": "app.js",
+  "dependencies": {
+    "mime": "*",
+    "commander": "*"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/muchencute/aliyun-oss-uploader.git"
+  },
+  "author": "Mi",
+  "license": "MIT",
+  "bin": {
+    "aliyun-oss-uploader": "bin/app"
+  }
+}

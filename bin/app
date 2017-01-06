@@ -1,0 +1,158 @@
+#!/usr/bin/node
+
+// MUST LF
+
+'use strict';
+
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const program = require('commander');
+const crypto = require('crypto');
+const mime = require('mime');
+
+program
+    .version(process.version)
+    .option('-l, --local-path [cwd]', 'Local Path', process.cwd())
+    .option('-b, --bucket [name]', 'Bucket Name', '')
+    .option('-k, --key [empty]', 'Key Prefix', '')
+    .option('-r, --region [oss-cn-shenzhen]', 'Region of Bucket', 'oss-cn-shenzhen')
+    .option('-i, --access-key-id [empty]', 'Access Key ID', '')
+    .option('-s, --access-key-secret [empty]', 'Access Key Secret', '')
+    .parse(process.argv);
+
+program.localPath = path.normalize(program.localPath);
+
+const client = {
+    region: program.region,
+    accessKeyId: program.accessKeyId,
+    accessKeySecret: program.accessKeySecret,
+    bucket: program.bucket
+};
+
+const tasks = [];
+
+function signature(options) {
+
+    options.method = options.method || 'GET';
+    options.headers['Content-MD5'] = options.headers['Content-MD5'] || '';
+    options.headers['Content-Type'] = options.headers['Content-Type'] || '';
+    options.headers['Date'] = options.headers['Date'] || new Date().toUTCString();
+
+    let ossHeader = '';
+    let headers = [];
+
+    Object.keys(options.headers).forEach((it) => {
+        if (/x-oss-/i.test(it)) {
+            headers.push(it);
+        }
+    });
+
+    headers = headers.sort(function (a, b) {
+        let lA = a.toLowerCase();
+        let lB = b.toLowerCase();
+        return lA.localeCompare(lB);
+    });
+
+    headers.forEach((it) => {
+        ossHeader += `${it.toLowerCase()}:${options.headers[it]}\n`;
+    });
+
+    let resources = `/${program.bucket}${decodeURI(options.path)}`;
+    let content = `${options.method}\n${options.headers['Content-MD5']}\n${options.headers['Content-Type']}\n${options.headers['Date']}\n${ossHeader}${resources}`;
+    return crypto.createHmac('sha1', client.accessKeySecret).update(content).digest('base64');
+}
+
+function md5(content) {
+    return crypto.createHash('md5').update(content).digest().toString('base64');
+}
+
+function upload(key, fullPath) {
+
+    let chunks = [];
+    let size = 0;
+
+    fs.createReadStream(fullPath).on('data', (chunk) => {
+
+        chunks.push(chunk);
+        size += chunk.length;
+
+    }).on('end', ()=> {
+
+        let data = null;
+        switch (chunks.length) {
+            case 0:
+                data = new Buffer(0);
+                break;
+            case 1:
+                data = chunks[0];
+                break;
+            default:
+                data = new Buffer(size);
+                let i = 0, pos = 0, l = chunks.length;
+                for (; i < l; i++) {
+                    const chunk = chunks[i];
+                    chunk.copy(data, pos);
+                    pos += chunk.length;
+                }
+                break;
+        }
+
+        let filename = path.normalize('/' + key).replace(/\\/g, '/');
+
+        let putOptions = {
+            host: `${program.bucket}.${program.region}.aliyuncs.com`,
+            method: 'PUT',
+            path: encodeURI(filename),
+            headers: {
+                'Cache-Control': 'no-cache',
+                'Content-Length': data.length,
+                'Date': new Date().toUTCString(),
+                'Expires': new Date().toUTCString(),
+                'Content-Disposition': '',
+                'Content-Type': mime.lookup(path.extname(filename)),
+                // 'Content-MD5': md5(bytes),
+                'x-oss-server-side-encryption': 'AES256',
+                'x-oss-object-acl': 'public-read'
+            }
+        };
+
+        putOptions.headers['Authorization'] = `OSS ${client.accessKeyId}:${signature(putOptions)}`;
+
+        let req = http.request(putOptions, (res) => {
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => {
+                console.log(`BODY: ${chunk}`);
+            });
+            res.on('end', () => {
+                console.log(`${filename}, No more data in response.`);
+            });
+        }).on('error', (e) => {
+            throw e;
+        });
+
+        req.write(data);
+        req.end();
+    });
+}
+
+function depth(dir) {
+    let list = fs.readdirSync(dir);
+    list.forEach((it) => {
+        let stat = fs.statSync(`${dir}/${it}`);
+        if (stat.isFile()) {
+            tasks.push({
+                key: program.key + `${dir}/${it}`.substr(program.localPath.length + 1),
+                path: `${dir}/${it}`
+            });
+        } else {
+            depth(`${dir}/${it}`);
+        }
+    });
+}
+
+depth(program.localPath);
+
+tasks.forEach((it) => {
+    upload(it.key, it.path);
+});
